@@ -1,18 +1,54 @@
+# ============================================================================
+# AR Head-Tilt Racing - a tiny racing game you steer by tilting your head.
+#
+# HOW IT PLAYS: your webcam watches your face. Tilt your head left or right
+# and the yellow car at the bottom of the screen slides across the road with
+# you. Dodge the falling blocks. The longer you survive, the faster it gets
+# and the higher your score. Press R to start/restart, Q to quit.
+#
+# HOW IT SEES YOUR HEAD TILT: Google's MediaPipe face AI (the
+# face_landmarker.task model file, auto-downloaded on first run) finds the
+# corners of your two eyes in each webcam frame. The angle of the line
+# between your eyes IS your head tilt - that is the whole trick.
+#
+# THE ONE FILE: everything (download helper, Obstacle class, game loop)
+# lives in this single file.
+#
+# BEFORE YOU RUN: pip install opencv-python mediapipe numpy
+# WHEN DEBUGGING (reasoned from the code, not re-tested):
+#   - "face_landmarker.task not found": the auto-download failed; check your
+#     internet connection and run again.
+#   - Car drifts without tilting: sit square to the camera when pressing R;
+#     bright even lighting helps the eye tracking.
+# ============================================================================
+
+# OpenCV: webcam frames and all the drawing
 import cv2
+# built-in (imported, currently unused)
 import sys
+# Google's face-tracking AI library
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+# arrays: the game screen is built as number grids
 import numpy as np
+# built-in: atan2/degrees for the head-tilt angle
 import math
+# built-in: checks whether the model file exists yet
 import os
+# built-in: downloads the AI model on first run
 import urllib.request
+# built-in: frame timing and score keeping
 import time
+# built-in: where and when obstacles appear
 import random
 
+# Where the face-tracking AI model lives online, and where we save it.
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 MODEL_PATH = "face_landmarker.task"
 
+# Downloads the AI model once (a few MB). After the first run the file is
+# already there and this does nothing.
 def download_model():
     if not os.path.exists(MODEL_PATH):
         print(f"Downloading MediaPipe Face model to {MODEL_PATH}...")
@@ -22,6 +58,8 @@ def download_model():
         except Exception as e:
             print(f"Download failed: {e}")
 
+# One falling block on the road. Knows where it is, how big and fast it is,
+# and how to draw itself.
 class Obstacle:
     def __init__(self, w, h):
         self.w = w
@@ -37,6 +75,8 @@ class Obstacle:
         self.color = (random.randint(50, 100), random.randint(50, 100), random.randint(150, 255))
         self.passed = False
 
+    # Slides the block down the screen. speed_multiplier rises over time,
+    # which is what makes the game get faster the longer you survive.
     def update(self, speed_multiplier):
         self.y += self.speed * speed_multiplier
 
@@ -46,6 +86,7 @@ class Obstacle:
         cv2.rectangle(img, (int(self.x - self.width/2), int(self.y - self.height/2)), 
                       (int(self.x + self.width/2), int(self.y + self.height/2)), (255, 255, 255), 2)
 
+# The whole game: camera setup, face tracking, steering, obstacles, drawing.
 def main():
     download_model()
     
@@ -53,6 +94,7 @@ def main():
         print("ERROR: face_landmarker.task not found!")
         return
 
+    # Set up the face AI: track one face, only report when at least 50% sure.
     base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
@@ -64,6 +106,7 @@ def main():
     )
     detector = vision.FaceLandmarker.create_from_options(options)
 
+    # Open the webcam and ask it for a 1280x720 picture.
     cap = cv2.VideoCapture(0)
     # Give higher resolution
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
@@ -98,6 +141,7 @@ def main():
 
     last_time = time.time()
     
+    # The main loop: once per webcam frame.
     while cap.isOpened():
         success, frame = cap.read()
         if not success:
@@ -136,6 +180,8 @@ def main():
                 face_angle = math.degrees(math.atan2(dy, dx))
             
             # Smooth angle
+            # Blend 70% old angle + 30% new measurement so the steering does
+            # not jitter with every tiny head wobble.
             smoothed_angle = smoothed_angle * 0.7 + face_angle * 0.3
             
             # Map angle to Car X target
@@ -155,6 +201,8 @@ def main():
                 car_x = max(road_left + car_width/2, min(road_right - car_width/2, car_x))
 
         # Game Logic
+        # dt = seconds since the last frame; using real time (not frame
+        # count) keeps the game speed steady even if the camera slows down.
         curr_time = time.time()
         dt = curr_time - last_time
         last_time = curr_time
@@ -172,6 +220,8 @@ def main():
                 obs.draw(overlay)
                 
                 # Collision check
+                # Box-overlap test: crash if the car's box and the obstacle's
+                # box overlap (with a 10-pixel mercy margin).
                 cx, cy = car_x, car_y
                 ox, oy = obs.x, obs.y
                 if abs(cx - ox) < (car_width/2 + obs.width/2 - 10) and \
@@ -206,6 +256,7 @@ def main():
             cv2.circle(overlay, (int(car_x + 15), int(car_y + car_height/2)), 5, (255, 255, 255), -1)
 
         # Composite HUD
+        # Blend the game drawings (overlay) over the dimmed webcam picture.
         frame = cv2.addWeighted(overlay, 0.9, frame, 1.0, 0)
         
         # UI Text
